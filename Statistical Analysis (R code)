@@ -32,7 +32,7 @@
   # Evaluate Exclusion criteria
   data$onboarding_eligibility_screening_complete <- factor(data$onboarding_eligibility_screening_complete)
   data <- filter(data, onboarding_eligibility_screening_complete == 2)
-  data <- mutate(data, randomization_group = ifelse(randomization_group == "MASKED_GROUP_A", "Treatment", "Placebo"))
+  data <- mutate(data, randomization_group = ifelse(randomization_group == "MASKED_GROUP_A", "Caffeine", "Vtiamin C"))
     
   data <- data %>%
     
@@ -249,9 +249,32 @@
       geom_bar(aes(x = randomization_group, fill = daily_caffeine_intake),
                position = position_dodge(width = .6), col = "black")
     
-    ggplot(exploratory_data) + 
-      geom_bar(aes(x = offboarding_strength, fill = randomization_group),
-               position = position_dodge(width = .8))
+    ggplot(exploratory_data, aes(x = offboarding_strength, fill = randomization_group)) +
+      geom_bar(position = position_dodge(width = 0.8), stat = "count", color = "black") +
+      
+      # Add value labels on top of bars
+      geom_text(stat = "count", aes(label = ..count..),
+                position = position_dodge(width = 0.8), vjust = -0.5, size = 4) +
+      
+      # Axis and title formatting
+      labs(
+        title = "Offboarding Strength Perception by Group",
+        x = "Percieved post-intervention strength difference",
+        y = "Count of Participants",
+        fill = "Randomization Group"
+      ) +
+      
+      # Theme for presentations
+      theme_minimal(base_size = 14) +
+      theme(
+        axis.text.x = element_text(angle = 0, hjust = 0.5),
+        axis.title = element_text(face = "bold"),
+        plot.title = element_text(face = "bold", hjust = 0.5),
+        legend.position = "top"
+      ) +
+      
+      # Add some breathing room above the bars
+      expand_limits(y = max(table(exploratory_data$offboarding_strength)) + 1)
     
     
     
@@ -303,11 +326,25 @@
     
     
     # Grip strength as a function of caffeine tolerance 
+    pivoted_data$timepoint <- factor(pivoted_data$timepoint, levels = c("initial_grip_strength_mean",
+                                                                        "final_grip_average"),
+                                     labels = c("Pre", "Post"))
+    
+    
     ggplot(pivoted_data, aes(x = timepoint, y = grip_strength, col = randomization_group)) + 
-      geom_point() + 
-      geom_line(aes(group = study_id)) + 
-      facet_grid(randomization_group~daily_caffeine_intake) + 
-      theme(legend.position = "none")
+      geom_point(size = 3, alpha = 0.6) + 
+      geom_line(aes(group = study_id), linewidth = 1) + 
+      facet_grid(randomization_group ~ daily_caffeine_intake) + 
+      theme(
+        axis.text.x = element_text(angle = 90),
+        axis.title.x = element_text(face = "bold"),
+        axis.title.y = element_text(face = "bold"),
+        legend.position = "none"
+      ) +
+      labs(
+        x = "Timepoint",
+        y = "Grip Strength (kg)"
+      )
     
       # This is probs best graph, shows daily caffeine intake is variable, but also indicates not that clear a relationship
 
@@ -366,47 +403,56 @@
       s1 <- seq(min(primary_model$frame$initial_physiology_weight), max(primary_model$frame$initial_physiology_weight), length.out = 100)
       p1 <- predict_response(primary_model, c("randomization_group"))
       
-      
       p <- ggplot() +
         
-        geom_point(data = pivoted_analysis,
-                   aes(x = randomization_group,
-                       y = Grip_Strength),
-                   position = position_jitter(width = 0.08),
-                   alpha = 0.35,
-                   size = 4,
-                   color = "grey50") +
-        
-        geom_point(data = p1,
-                   aes(x = x, y = predicted),
-                   size = 8,
-                   color = "black") +
-        
-        geom_errorbar(data = p1,
-                      aes(x = x,
-                          ymin = conf.low,
-                          ymax = conf.high),
-                      width = 0.20,
-                      linewidth = 1.2,
-                      color = "black") +
-        
-        labs(
-          x = "",
-          y = "Grip Strength (kg)"
+        # Raw data points with jitter
+        geom_point(
+          data = pivoted_analysis,
+          aes(x = randomization_group, y = Grip_Strength, col = randomization_group),
+          position = position_jitter(width = 0.08),
+          alpha = 0.35,
+          size = 4
         ) +
         
-        theme_classic(base_size = 16) +
+        # Predicted points
+        geom_point(
+          data = p1,
+          aes(x = x, y = predicted),
+          size = 8,
+          col = "black"
+        ) +
         
+        # Error bars for predicted points
+        geom_errorbar(
+          data = p1,
+          aes(x = x, ymin = conf.low, ymax = conf.high),
+          width = 0.20,
+          linewidth = 1.2,
+          color = "black"
+        ) +
+        
+        # Labels
+        labs(x = "",
+          y = "Post-intervention Grip Strength (kg)"
+          # x label is now left as default
+        ) +
+        
+        # Theme
+        theme_classic(base_size = 16) +
         theme(
           axis.title = element_text(face = "bold", size = 20),
           axis.text.x = element_text(size = 20, face = "bold"),
           axis.text.y = element_text(size = 14),
-          plot.margin = margin(10, 15, 10, 10)
+          plot.margin = margin(10, 15, 10, 10),
+          legend.position = "none"
         )
       p
       
 ##########################################################################################################################################.
 ## Secondary Analysis (caffeine tolerance) ---- 
+      
+      # All secondary analyses have a Bonferroni correction applied,
+      # meaning that the new significance level is p < 0.017!!!
 ##########################################################################################################################################.
     
     ### Get data ----
@@ -449,6 +495,7 @@
 ## Secondary Analysis (Systollic bp vs caffeine) ---- 
 ##########################################################################################################################################.
       
+      ## SENSITIVITY Analysis ----
       ### Get data ----
       data_systollic <- exploratory_data
       view(data_systollic)
@@ -472,7 +519,7 @@
           
         # No clear issues in my opinion, other then this is a super tall male
         # who weighs above 95% of the cohort. Take a closer look when plotting however.
-        
+      
       # Model without potential outlier
       sec_model_systollic_OUTLIER <- glmmTMB(final_physiology_systoly ~ randomization_group + initial_physiology_systoly + (1|study_id), data = filter(data, study_id != "85295ba10a7938261e035d9e680557fe"))
       
@@ -498,12 +545,113 @@
       ### Prediction plots ----
       plot(predict_response(sec_model_systollic, c("randomization_group")))
       plot(predict_response(sec_model_systollic_OUTLIER, c("randomization_group")))
-
+      dd_sec <- predict_response(sec_model_systollic, c("randomization_group"))
       
-
-      
-
+      ggplot() +
         
- 
+        # Raw data points with jitter
+        geom_point(data = data_systollic,
+                   aes(x = randomization_group, y = final_physiology_systoly, col = randomization_group),
+                   position = position_jitter(width = 0.08),
+                   alpha = 0.35,
+                   size = 4) +
+        
+        # Predicted points
+        geom_point(data = dd_sec,
+                   aes(x = x, y = predicted),
+                   size = 8,
+                   col = "black") +
+        
+        # Error bars for predicted points
+        geom_errorbar(data = dd_sec,
+                      aes(x = x, ymin = conf.low, ymax = conf.high),
+                      width = 0.20,
+                      linewidth = 1.2,
+                      color = "black") +
+        
+        # Labels
+        labs(
+          x = "",
+          y = "Post-intervention Systolic Blood Pressure (mmHg)"
+        ) +
+        
+        # Theme
+        theme_classic(base_size = 16) +
+        theme(
+          axis.title = element_text(face = "bold", size = 20),
+          axis.text.x = element_text(size = 20, face = "bold"),
+          axis.text.y = element_text(size = 14),
+          plot.margin = margin(10, 15, 10, 10),
+          legend.position = "none"
+        )
+      
+      
+##########################################################################################################################################.
+## Secondary Analysis (Systollic bp vs caffeine) ---- 
+##########################################################################################################################################.
+     
+      # redifine data
+      data_heart <- predict_response(model_heart, c("randomization_group"))
+      
+      ### Fit model ----
+      model_heart <- glmmTMB(final_physiology_hr ~ randomization_group + initial_physiology_hr + (1|study_id), data = exploratory_data)
+      S(mode_heart)
+      
+      
+      ### Internal model validation ----
+      infPlot_glmmTMB(model_heart, obs= T)
+      infPlot_glmmTMB(model_heart, group= "study_id")
+      
+      # All good in the hood
+      
+      ### Generalizibility ----
+      check_model(model_heart)
+      
+      # Model diagnostics indicated adequate fit.
+      
+      residualPlots_glmmTMB(model_heart)
+      
+      ### Evaluate Primary model ----
+      S(model_heart)
+      
+      model_performance(primary_model)
 
+      ### Prediction plot ----
+      ggplot() +
+        
+        # Raw data points with jitter
+        geom_point(data = exploratory_data,
+                   aes(x = randomization_group, y = final_physiology_hr, col = randomization_group),
+                   position = position_jitter(width = 0.08),
+                   alpha = 0.35,
+                   size = 4) +
+        
+        # Predicted points
+        geom_point(data = data_heart,
+                   aes(x = x, y = predicted),
+                   size = 8,
+                   col = "black") +
+        
+        # Error bars for predicted points
+        geom_errorbar(data = data_heart,
+                      aes(x = x, ymin = conf.low, ymax = conf.high),
+                      width = 0.20,
+                      linewidth = 1.2,
+                      color = "black") +
+        
+        # Labels
+        labs(
+          x = "",
+          y = "Post-intervention Heart Rate (bpm)"
+        ) +
+        
+        # Theme
+        theme_classic(base_size = 16) +
+        theme(
+          axis.title = element_text(face = "bold", size = 20),
+          axis.text.x = element_text(size = 20, face = "bold"),
+          axis.text.y = element_text(size = 14),
+          plot.margin = margin(10, 15, 10, 10),
+          legend.position = "none"
+        )
   
