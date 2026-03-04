@@ -1,0 +1,509 @@
+## Welcome to my RCT analysis ##
+
+# RQ = Does caffeine have an effect on maximal volantory grip strength compared to placebo
+# when controlling for weight + sex.
+
+## load necessary libraries ----
+
+  library(pastecs)
+  library(ggplot2); theme_set(theme_bw())
+  library(ggpubr)
+  library(ggfortify)
+  library(GGally)
+  library(ggeffects)
+  library(leaflet)
+  library(car)
+  library(tidyverse)
+  library(readxl)
+  library(glmmTMB)
+  library(performance)
+  
+## Import Data ----
+  
+  data <- read.csv("/Users/matistarnawski/Desktop/University of Zurich/LAST SEMESTER/Randomized controlled trials/GripStrength_BME361_DataExport.csv", stringsAsFactors=TRUE)
+  str(data)
+  glimpse(data)
+  colnames(data)
+
+##########################################################################################################################################.
+## Data cleaning ----
+##########################################################################################################################################.
+
+  # Evaluate Exclusion criteria
+  data$onboarding_eligibility_screening_complete <- factor(data$onboarding_eligibility_screening_complete)
+  data <- filter(data, onboarding_eligibility_screening_complete == 2)
+  data <- mutate(data, randomization_group = ifelse(randomization_group == "MASKED_GROUP_A", "Treatment", "Placebo"))
+    
+  data <- data %>%
+    
+      # Remove NAs, start analysis if they tok initial specs
+      filter(initial_physiology_hrbp_complete == 2
+           )%>%
+      
+      # Biological sex
+      mutate(biological_sex = factor(biological_sex, levels = c(0,1,2,3), labels = c("Female", "Male", "Other", "PreferNotToSay"))
+             ) %>%
+      
+      # Dominant Hand label
+      mutate(dominant_hand = factor(dominant_hand, levels = c(1,2,3), labels = c("Right", "Left", "Ambidextrous"))
+             ) %>%
+    
+      # Daily caffeine intake
+      mutate(daily_caffeine_intake = factor(daily_caffeine_intake, 
+                                            levels = 0:6, 
+                                            labels = c("0 mg/day", "1-50 mg/day", "51-100 mg/day",
+                                                                     "101-200 mg/day", "201-400 mg/day", ">400 mg/day","PreferNotToSay"))
+             ) %>%
+      # Resistance traning
+      mutate(pretrial_survey_exercise = factor(pretrial_survey_exercise,
+                                                  levels = 0:6,
+                                                  labels = c("Never", "<1x/week", "1x/week",
+                                                             "2x/week", "3x/week", ">=4x/week", "PreferNotToSay"))
+      ) %>%
+      # Assumed treatment
+      mutate(offboarding_group_assoc = factor(offboarding_group_assoc,
+                                              levels = c(0,1,2),
+                                              labels = c("Treatment", "Placebo", "IDK"))
+             ) %>%
+      # Percieved Strength
+      mutate(offboarding_strength = factor(offboarding_strength))
+
+  
+  str(data)
+  
+## Select the Columns i want for exploratory data analysis
+  
+  exploratory_data <- data %>%
+    select(
+      excl_notes,
+      onboarding_eligibility_screening_complete,
+      daily_caffeine_intake,
+      dominant_hand,
+      biological_sex,
+      study_id,
+      age,
+      initial_physiology_weight,
+      initial_physiology_height,
+      randomization_group,
+      initial_physiology_hr,
+      initial_physiology_systoly,
+      initial_physiology_diastoly,
+      initial_grip_strength_m1,
+      initial_grip_strength_m2,
+      initial_grip_strength_m3,
+      initial_grip_strength_mean,
+      final_physiology_hr,
+      final_physiology_systoly,
+      final_physiology_diastoly,
+      final_grip_strength_m1,
+      final_grip_strength_m2,
+      final_grip_strength_m3,
+      offboarding_strength,
+      offboarding_group_assoc
+    )
+  
+
+  str(exploratory_data)
+
+##########################################################################################################################################.
+## Numerical Exploration ----
+##########################################################################################################################################.
+  
+  summary(exploratory_data) 
+  
+      # Someone had bread at 8 but were still included
+      # Someone has Thalassemia, included but ended up feeling dizzy at the end
+      # Total 13 participants
+      # One person nevers drinks coffee !
+      # 6 people in group A, 7 in group B
+      # Someone had a initial HR of 118, maybe not relaxed
+    
+    ### Assesment of normality of grip strength, should be the case
+    grip_strength <- grep("_grip_strength_", colnames(exploratory_data), value = TRUE)
+    ggpairs(exploratory_data[, grip_strength])
+      ### Outcome normally distributed ----
+    
+    
+    # general overview
+    group_by(exploratory_data, randomization_group) %>%
+      summarize(AvAge = mean(age), SdAge = sd(age),
+                AvWeight = mean(initial_physiology_weight), SdWeight = sd(initial_physiology_weight),
+                AvHeight = mean(initial_physiology_height), SdHeight = sd(initial_physiology_height),
+                AvGripBase = mean(initial_grip_strength_mean), SdGripBase = sd(initial_grip_strength_mean))
+    
+      # Age is balanced in both classes, weight is balanced as it should be and height is pretty fair
+    
+    table(exploratory_data$randomization_group, exploratory_data$biological_sex)
+      
+      # There is a slight imbalance of sex among groups A and B, and as sex is a strong predictor of 
+      # grip strength, we will consider it as a covariate although not specified in SAP. (maybe).
+    
+    
+    # Fix one value of age was written as a year
+    data <- mutate(data, age = ifelse(age == 1999, 27, age))
+    exploratory_data <- mutate(exploratory_data, age = ifelse(age == 1999, 27, age))
+    data$age
+  
+    
+    ### Colinearity Check ----
+    # Threshold for co-linearity >= 0.7, indicative of a redundant variable pair
+    correlation_data <- select(exploratory_data, daily_caffeine_intake, biological_sex, initial_physiology_weight,
+                               initial_physiology_height, initial_physiology_hr, initial_physiology_systoly,
+                               initial_physiology_diastoly, initial_grip_strength_mean, final_grip_strength_m1)
+    
+    cor_matrix <- cor(sapply(correlation_data, as.numeric))
+    cor_matrix
+    
+      # Biological sex and height = 0.78466321
+      # Height and weight = 0.80882657
+      # Systollic and Biological sex = 0.7206739
+    
+    # Suprisingly there is no association between diastollic and systolllic, however we will still use systollic as a measure for blood pressure.
+    # Additionally, weight will be used instead of height, and biological sex still considered.
+    # General correlations to further investigate is initial grip vs postgrip, systollic vs postgrip, sex vs postgrip, height vs postgrip
+
+##########################################################################################################################################.
+## Graphical Exploration ----
+##########################################################################################################################################.
+    
+    names(exploratory_data)
+    
+    # First to answer Research question 
+      # The average of the final grip was taken for visualization purposes
+      exploratory_data <- mutate(exploratory_data,
+                                final_grip_average = rowMeans(select(exploratory_data,
+                                                                     final_grip_strength_m1,
+                                                                     final_grip_strength_m2,
+                                                                     final_grip_strength_m3)))
+      
+### RQ plot ----
+      
+      ggplot(exploratory_data) + 
+        geom_boxplot(aes(x = randomization_group, y = final_grip_average, fill = randomization_group), 
+                     width = .4, alpha = .2) + 
+        geom_point(aes(x = randomization_group, y = final_grip_average, color = biological_sex),
+                   position = position_jitter(width = 0.2),
+                   size = 4,
+                   alpha = .6)
+      
+      # Visually there seems to be a difference between group A and B. 
+      # Again, sex seems to be a major predictor of asbolute grip strenght, however, if it contributes to 
+      # higher baseline differences and then sex is irrelevant for a comparison between group A and B.
+
+  # + WEIGHT
+      
+      # With entire data
+    RQ_plot1 <- ggplot(exploratory_data) + 
+      geom_point(aes(x = initial_physiology_weight, y = final_grip_average, colour = randomization_group)) + 
+      geom_smooth(aes(x = initial_physiology_weight, y = final_grip_average, colour = randomization_group),
+                  method = "lm") + 
+      theme_classic2() + 
+      xlab("Weight (kg)") + 
+      ylab("Average Post inntervention grip strength (kg)") + 
+      scale_x_continuous(limits = c(50, 100))
+    
+      # Without male weighing 100
+    RQ_plot2 <- ggplot(filter(exploratory_data, initial_physiology_weight < 90)) + 
+      geom_point(aes(x = initial_physiology_weight, y = final_grip_average, colour = randomization_group)) + 
+      geom_smooth(aes(x = initial_physiology_weight, y = final_grip_average, colour = randomization_group),
+                  method = "lm") + 
+      theme_classic2() + 
+      xlab("Weight (kg)") + 
+      ylab("Average Post inntervention grip strength (kg)") + 
+      scale_x_continuous(limits = c(50, 100))
+    
+    ggarrange(RQ_plot1, RQ_plot2, legend = "bottom")
+    
+    # The effect direction of weight seems to be dependent on 1 participant in group B
+    # Potential Outlier - Check later when fitting model
+    
+    
+### Exploration of Sex ----
+    # Plot showing difference in final grip strength between groups and between sexes
+    ggplot(exploratory_data) + 
+      geom_boxplot(aes(x = randomization_group, y = final_grip_average, colour = biological_sex))
+    
+      # There are clear sex differences however, due to our analysis accounting for pre-measurement
+      # it most likely does not matter. Will evaluate later on individual basis.
+
+### Exploration of age ----
+    ggplot(exploratory_data) + 
+      geom_point(aes(x = age, y = final_grip_average)) + 
+      geom_smooth(aes(x = age, y = final_grip_average, colour = randomization_group), method = "lm")
+      
+      # No clear relationship between age is observed, this is presumed as the age range
+      # is small and our target population is very similar in this characterisitic.
+    
+### Systollic bp exploration ----
+    ggplot(exploratory_data) + 
+      geom_boxplot(aes(x = randomization_group, y = final_physiology_systoly)) + 
+      geom_point(aes(x = randomization_group, y = final_physiology_systoly, colour = biological_sex), 
+                 position = position_jitter(width = .2),
+                 size = 4) 
+      # There seems to be a difference between systollic end pressure.
+      # However, gotta evaluate individual level to be inclusive of the 
+      # beginning values.
+
+### Placebo effect exploration ----
+    ggplot(exploratory_data) + 
+      geom_bar(aes(x = randomization_group, fill = daily_caffeine_intake),
+               position = position_dodge(width = .6), col = "black")
+    
+    ggplot(exploratory_data) + 
+      geom_bar(aes(x = offboarding_strength, fill = randomization_group),
+               position = position_dodge(width = .8))
+    
+    
+    
+### Individual level analysis ----
+    # Pivot data for the necessary plots and analysis
+    pivoted_data <- pivot_longer(exploratory_data, cols = c("initial_grip_strength_mean", "final_grip_average"),
+                                 names_to = "timepoint",
+                                 values_to = "grip_strength")
+    
+    # Evaluate how sex affects baseline and post intervention measurements
+    ggplot(pivoted_data, aes(x = timepoint, y = grip_strength, colour = biological_sex)) + 
+      geom_point() + 
+      geom_line(aes(group = biological_sex)) +
+      facet_wrap(~study_id)
+    
+      # The general differences between pre intervention grip strength shows that the change is not
+      # dependent on sex, since males tend to start higher and thus end higher. This will be accounted for 
+      # thanks to inclusion of pre-measurement grip strength as a variable in the SAP.
+    
+    # Plot showing differences in grip strength in both groups
+    ggplot(pivoted_data, 
+           aes(x = timepoint, y = grip_strength,
+               color = study_id,
+               shape = randomization_group)) +
+      geom_point(size = 3) +
+      geom_line(aes(group = study_id)) +
+      facet_wrap(~ randomization_group) +
+      labs(title = "Change in Grip Strength by Study",
+           x = "Timepoint",
+           y = "Grip Strength Mean",
+           shape = "Masked Group") +
+      guides(color = "none")
+      
+      # There seems to be not only different baseline, but also different individual random slopes
+      # based on the timepoint of measurement. DISCUSS WITH STATISTICIAN.
+      
+    # Now evalautaing each participant trial is unique
+    pivot_trial_unique <- pivot_longer(exploratory_data, cols = c("initial_grip_strength_m1", "initial_grip_strength_m2", "initial_grip_strength_m3",
+                                                                  "final_grip_strength_m1", "final_grip_strength_m2", "final_grip_strength_m3"),
+                                       names_to = "Timepoint",
+                                       values_to = "Grip")
+    
+    ggplot(pivot_trial_unique) + 
+      geom_point(aes(x = Timepoint, y = Grip, colour = randomization_group)) + 
+      geom_line(aes(x = Timepoint, y = Grip , colour = randomization_group, group = biological_sex)) + 
+      facet_wrap(~study_id)
+    
+      # Plot showing nothing. Or maybe !
+    
+    
+    # Grip strength as a function of caffeine tolerance 
+    ggplot(pivoted_data, aes(x = timepoint, y = grip_strength, col = randomization_group)) + 
+      geom_point() + 
+      geom_line(aes(group = study_id)) + 
+      facet_grid(randomization_group~daily_caffeine_intake) + 
+      theme(legend.position = "none")
+    
+      # This is probs best graph, shows daily caffeine intake is variable, but also indicates not that clear a relationship
+
+##########################################################################################################################################.
+## Primary Analysis ----
+##########################################################################################################################################.
+    
+    # Primary analysis evaluates whether the inntervention affected the maximal grip strength,
+    # taking into account the pre-measurement, weight and study_id as random intercept. Nonetheless,
+    # all models will be made and evaluated comparativly.
+    
+    ### Pivot data for models ----
+    pivoted_analysis <- pivot_longer(exploratory_data, cols = c("final_grip_strength_m1", "final_grip_strength_m2", "final_grip_strength_m3"),
+                                     names_to = "Trial", values_to = "Grip_Strength")
+    
+    ### Research Question model ----
+    RQ_model1 <- glmmTMB(Grip_Strength ~ randomization_group + initial_physiology_weight + initial_grip_strength_mean + (1|study_id), data = pivoted_analysis)
+    RQ_model2 <- glmmTMB(Grip_Strength ~ randomization_group + initial_grip_strength_mean + (1|study_id), data = pivoted_analysis)
+    anova(RQ_model1, RQ_model2)
+    
+    primary_model <- RQ_model1
+    
+      # It does not seem that weight was as large of a con-founder as we thought, nonetheless, 
+      # the primary analysis was defined in the SAP and we must thus stick with it.
+    
+    ### Internal model validation ----
+    source("/Users/matistarnawski/Desktop/University of Zurich/SEMESTER 7/Applied Statistics/Recap Scripts 2/Custom functions.r")
+    
+    infPlot_glmmTMB(primary_model, obs= T)
+    infPlot_glmmTMB(primary_model, group= "study_id")
+    
+      # One guy seems to be a outlier, based on cooks distance
+      glimpse(filter(data, study_id == "a0e1ebf44dafeba77cd58accd88ebd08")) # Look at the plots again!!
+      
+    ### Generalizability/External validation ----
+      check_model(primary_model)
+      residualPlots_glmmTMB(primary_model)
+      
+        # Everything looks good here, the model seems to suit the underlying data distribution
+        # as well as there not being any major outliers or high leverage points
+      
+    ### Evaluate Primary model ----
+      S(primary_model)
+      confint(primary_model)
+      
+        # Group B tends to have lower post intervention grip strength (not sign). Nothing
+        # else is needed to be interpreted, since our RCT goal was this effect which already
+        # encompasses/accounts-for the effect of other confounders and covariates.
+      
+      model_performance(primary_model) # marginal R^2 = 0.564, not much of the variation is explained
+      
+      
+    ### Prediction plots ----
+      plot(predict_response(primary_model, c("randomization_group"))) # reference plot
+      
+      s1 <- seq(min(primary_model$frame$initial_physiology_weight), max(primary_model$frame$initial_physiology_weight), length.out = 100)
+      p1 <- predict_response(primary_model, c("randomization_group"))
+      
+      
+      p <- ggplot() +
+        
+        geom_point(data = pivoted_analysis,
+                   aes(x = randomization_group,
+                       y = Grip_Strength),
+                   position = position_jitter(width = 0.08),
+                   alpha = 0.35,
+                   size = 4,
+                   color = "grey50") +
+        
+        geom_point(data = p1,
+                   aes(x = x, y = predicted),
+                   size = 8,
+                   color = "black") +
+        
+        geom_errorbar(data = p1,
+                      aes(x = x,
+                          ymin = conf.low,
+                          ymax = conf.high),
+                      width = 0.20,
+                      linewidth = 1.2,
+                      color = "black") +
+        
+        labs(
+          x = "",
+          y = "Grip Strength (kg)"
+        ) +
+        
+        theme_classic(base_size = 16) +
+        
+        theme(
+          axis.title = element_text(face = "bold", size = 20),
+          axis.text.x = element_text(size = 20, face = "bold"),
+          axis.text.y = element_text(size = 14),
+          plot.margin = margin(10, 15, 10, 10)
+        )
+      p
+      
+##########################################################################################################################################.
+## Secondary Analysis (caffeine tolerance) ---- 
+##########################################################################################################################################.
+    
+    ### Get data ----
+      pivoted_analysis <- pivoted_analysis
+      
+    ### Secondary outcome model ----
+      sec_model <- glmmTMB(Grip_Strength ~ randomization_group + daily_caffeine_intake + initial_grip_strength_mean + (1|study_id), data = pivoted_analysis)
+      Anova(sec_model)
+      summary(sec_model)
+      
+        # Daily caffeine intake does fck all in terms of explaining the variance in the data. Additionally,
+        # including it as a covariate does not improve the effect of caffeine on grip strength.
+      
+    ### Internal model validation ----
+      infPlot_glmmTMB(sec_model, obs= T)
+      infPlot_glmmTMB(sec_model, group= "study_id")
+      
+        # All good in the hood
+      
+    ### Generalizibility ----
+      check_model(sec_model)
+      
+        # Model diagnostics indicated adequate fit.
+      
+      residualPlots_glmmTMB(sec_model)
+      
+    ### Evaluate Primary model ----
+      S(sec_model)
+      
+      # Nothing except initial grip strength as a predictor are significant. There is practically
+      # no evidence that regular caffeine intake on any scale improves the grip strength. Still 
+      # group B remains to have a lower grip strength then group A.
+      
+      model_performance(primary_model)
+      
+    ### Predcition plots ----
+      plot(predict_response(sec_model, c("randomization_group", "daily_caffeine_intake")))
+      
+##########################################################################################################################################.
+## Secondary Analysis (Systollic bp vs caffeine) ---- 
+##########################################################################################################################################.
+      
+      ### Get data ----
+      data_systollic <- exploratory_data
+      view(data_systollic)
+      
+      ### Secondary outcome model ----
+      sec_model_systollic <- glmmTMB(final_physiology_systoly ~ randomization_group + initial_physiology_systoly + (1|study_id), data = data_systollic)
+      Anova(sec_model_systollic)
+      summary(sec_model_systollic)
+      
+      # It seems to be almost significant, that group B has a lower systollic bp compared to group A.
+      # Who knows which is which, however this has to be further evaluated...i remember one guy with bad bp.
+      
+      ### Internal model validation ----
+      infPlot_glmmTMB(sec_model_systollic, obs= T)
+      infPlot_glmmTMB(sec_model_systollic, group= "study_id")
+      
+        # participant 85295ba10a7938261e035d9e680557fe is a outlier with a cooks distance of 0.43
+        # using 4 /n as a metric for calculating cooks distamce.
+      
+        glimpse(filter(data, study_id == "85295ba10a7938261e035d9e680557fe"))
+          
+        # No clear issues in my opinion, other then this is a super tall male
+        # who weighs above 95% of the cohort. Take a closer look when plotting however.
+        
+      # Model without potential outlier
+      sec_model_systollic_OUTLIER <- glmmTMB(final_physiology_systoly ~ randomization_group + initial_physiology_systoly + (1|study_id), data = filter(data, study_id != "85295ba10a7938261e035d9e680557fe"))
+      
+        # Non positive Hessian matrix - aka model is too complex
+      
+      ### Generalizibility ----
+      check_model(sec_model_systollic)
+      check_model(sec_model_systollic_OUTLIER)
+      
+      # Model diagnostics indicated adequate fit.
+      
+      residualPlots_glmmTMB(sec_model_systollic)
+      residualPlots_glmmTMB(sec_model_systollic_OUTLIER)
+      
+      ### Evaluate Primary model ----
+      S(sec_model_systollic)
+      S(sec_model_systollic_OUTLIER)
+      confint(sec_model_systollic)
+      
+        # Without James the there is a significance between bp and randomization group
+        # showing a 16 mmHg lower systollic bp in group B compared to A.
+      
+      ### Prediction plots ----
+      plot(predict_response(sec_model_systollic, c("randomization_group")))
+      plot(predict_response(sec_model_systollic_OUTLIER, c("randomization_group")))
+
+      
+
+      
+
+        
+ 
+
+  
